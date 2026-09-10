@@ -1,0 +1,9 @@
+[Unit]
+Description=Update Experimental Physics Control Code
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+ExecStart=/home/dorkmaster/update-lab-code.sh
