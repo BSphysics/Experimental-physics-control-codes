@@ -1,0 +1,19 @@
+#!/bin/bash
+
+REPO="$HOME/Experimental-physics-control-codes"
+
+echo "Waiting for network..."
+
+until git ls-remote https://github.com/BSphysics/Experimental-physics-control-codes.git > /dev/null 2>&1
+do
+    sleep 5
+done
+
+echo "Network available."
+echo "Updating experimental physics control code..."
+
+cd "$REPO" || exit 1
+
+git pull --ff-only origin main
+
+echo "Update complete."
