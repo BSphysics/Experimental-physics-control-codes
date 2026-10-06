@@ -15,6 +15,7 @@ library is openpyxl (confirmed installed on the target machine).
 
 Layout replicated from the existing template ("IR Sensor" sheet):
     B1                     projectile label
+    A7/B7                  "Reduced chi squared" label + copy of AB405 (highlighted)
     D1/G1/J1/M1/P1         "Run 1".."Run 5" headers
     D3:Q3                  Time/Distance sub-headers for the 5 runs
     Run data columns (Time, Distance) live at:
@@ -23,20 +24,24 @@ Layout replicated from the existing template ("IR Sensor" sheet):
         Run 3 -> J, K
         Run 4 -> M, N
         Run 5 -> P, Q
-    Data rows                4 .. 83  (80 rows)
+    Data rows                4 .. 403  (400 rows; was 4 .. 83)
     S..AC                    Mean/SEM/model/chi-squared formula block
     AD                       constant systematic uncertainty (per row)
     AE                       total uncertainty = sqrt(SEM^2 + systematic^2)
-    Z86                      t0 offset (seconds, auto-estimated)
-    Z87                      systematic uncertainty (metres, editable)
-    AB85                     reduced chi-squared summary
+    AB405                    reduced chi-squared summary   (was AB85)
+    Z406                     t0 offset (seconds, auto-est.) (was Z86)
+    Z407                     systematic uncertainty (m)     (was Z87)
+
+The summary cells keep the same position *relative to the end of the data
+block* as the original template; their addresses are derived from
+LAST_DATA_ROW, so always refer to them via the constants below.
 
 Chi-squared now divides the (model-data)^2 by the *total* uncertainty
 (AE = SEM combined in quadrature with a constant systematic term), not by
 the SEM alone, so the reduced chi-squared is not detonated by the sub-mm
-run-to-run SEM. The systematic value lives in a single editable cell (Z87)
-and the AD column simply references it, so it reads as a column of constant
-values but is changed in one place.
+run-to-run SEM. The systematic value lives in a single editable cell
+(SIGMA_SYS_CELL) and the AD column simply references it, so it reads as a
+column of constant values but is changed in one place.
 """
 
 import os
@@ -51,14 +56,34 @@ except Exception:
 # ---- Template constants (do not change without re-checking the hand-out sheet) ----
 SHEET_NAME = "IR Sensor"
 FIRST_DATA_ROW = 4
-N_DATA_ROWS = 80
-LAST_DATA_ROW = FIRST_DATA_ROW + N_DATA_ROWS - 1  # 83
-T0_DEFAULT = 0.105  # seconds; overwritten by the auto-estimator once 5 runs exist
+# Was 80 (~1.5 s at ~19 ms/sample), which silently clipped fan-slowed falls.
+# 400 = N_SAMPLES - DROP_IDX in freefall_03, i.e. every post-release sample the
+# acquisition loop can return, so the student's cursor click is now the only
+# thing that truncates the data. If you lengthen the acquisition, raise this.
+N_DATA_ROWS = 400
+LAST_DATA_ROW = FIRST_DATA_ROW + N_DATA_ROWS - 1  # 403
+T0_DEFAULT = 0.105  # seconds; overwritten by the auto-estimator once runs exist
 
-# cells holding the (auto-estimated) release delay and the systematic uncertainty
-T0_CELL = "Z86"
-SIGMA_SYS_CELL = "Z87"
+# Summary cells sit just below the data block (same relative positions as the
+# original AB85/Z86/Z87), derived from LAST_DATA_ROW so run data can never
+# overwrite them.
+CHI2_LABEL_CELL = f"AA{LAST_DATA_ROW + 2}"
+CHI2_CELL = f"AB{LAST_DATA_ROW + 2}"            # reduced chi-squared
+T0_LABEL_CELL = f"Y{LAST_DATA_ROW + 3}"
+T0_CELL = f"Z{LAST_DATA_ROW + 3}"               # release delay t0
+SIGMA_SYS_LABEL_CELL = f"Y{LAST_DATA_ROW + 4}"
+SIGMA_SYS_CELL = f"Z{LAST_DATA_ROW + 4}"        # systematic uncertainty
 SIGMA_SYS_DEFAULT = 0.01  # metres (~10 mm); VL53L1X absolute ranging error. Editable.
+
+# Copy of the reduced chi-squared near the top of the sheet, so students don't
+# have to scroll 400 rows to find it. B7 simply references CHI2_CELL.
+TOP_CHI2_LABEL_CELL = "A7"
+TOP_CHI2_CELL = "B7"
+
+# Original 80-row layout - only used to upgrade workbooks written by the old code.
+_LEGACY_LAST_DATA_ROW = 83
+_LEGACY_SUMMARY_CELLS = ("AA85", "AB85", "Y86", "Z86", "Y87", "Z87")
+_LEGACY_SIGMA_SYS_CELL = "Z87"
 
 # (time_col, dist_col) for each of the 5 runs, 1-indexed to match openpyxl
 RUN_COLS = {
@@ -81,6 +106,54 @@ def _safe_name(name):
 
 def workbook_path(folder, projectile_name):
     return os.path.join(folder, _safe_name(projectile_name) + ".xlsx")
+
+
+def _write_summary_cells(ws, t0=T0_DEFAULT, sigma_sys=SIGMA_SYS_DEFAULT):
+    """t0 offset + systematic uncertainty + highlighted reduced chi-squared."""
+    ws[T0_LABEL_CELL] = "t offset"
+    ws[T0_CELL] = t0
+    ws[SIGMA_SYS_LABEL_CELL] = "systematic error (m)"
+    ws[SIGMA_SYS_CELL] = sigma_sys
+    ws[CHI2_LABEL_CELL] = "Reduced Chi squared"
+    ws[CHI2_CELL] = (f"=SUM(AC{FIRST_DATA_ROW}:AC{LAST_DATA_ROW})/"
+                     f"(COUNT(AC{FIRST_DATA_ROW}:AC{LAST_DATA_ROW})-1)")
+    # mirror it at the top of the sheet (A7 label, B7 value)
+    ws[TOP_CHI2_LABEL_CELL] = "Reduced chi squared"
+    ws[TOP_CHI2_LABEL_CELL].font = Font(bold=True)
+    ws[TOP_CHI2_CELL] = f"={CHI2_CELL}"
+    # same highlight on both copies
+    for addr in (CHI2_CELL, TOP_CHI2_CELL):
+        ws[addr].fill = PatternFill(fill_type="solid", fgColor="FFFF00")  # yellow
+        ws[addr].font = Font(bold=True, color="FF0000")                   # red
+
+
+def _write_row_formulas(ws, first_row, last_row):
+    """Per-row live formula block (S..AE) for rows first_row..last_row."""
+    for r in range(first_row, last_row + 1):
+        # references to the five runs' time / distance cells
+        t_refs = ",".join(f"{RUN_COLS[run][0]}{r}" for run in (5, 4, 3, 2, 1))
+        d_refs = ",".join(f"{RUN_COLS[run][1]}{r}" for run in (5, 4, 3, 2, 1))
+        # IFERROR guards keep the empty rows (no data yet) blank instead of
+        # showing #DIV/0! from AVERAGE/STDEV over empty cells. Filled rows are
+        # unaffected. The reduced chi-squared was always correct regardless
+        # (AC is gated on Y=5), this is purely so the sheet looks clean.
+        ws[f"S{r}"] = f"=IFERROR(AVERAGE({t_refs})*0.001,\"\")"
+        ws[f"T{r}"] = f"=S{r}"
+        ws[f"U{r}"] = f"=IFERROR(AVERAGE({d_refs})*0.001,\"\")"
+        ws[f"V{r}"] = f"=IFERROR(U{r}-$U${FIRST_DATA_ROW},\"\")"
+        ws[f"W{r}"] = f"=IFERROR(STDEV({d_refs})*0.001,\"\")"
+        ws[f"X{r}"] = f"=IFERROR(W{r}/SQRT(5),\"\")"
+        ws[f"Z{r}"] = f"=IFERROR(0.5*9.81*MAX(0,(T{r}-${T0_CELL}))^2,\"\")"
+        ws[f"AA{r}"] = f"=IFERROR((Z{r}-V{r})^2,\"\")"
+        # constant systematic (references the single editable cell) ...
+        ws[f"AD{r}"] = f"=${SIGMA_SYS_CELL}"
+        # ... combined with the SEM in quadrature ...
+        ws[f"AE{r}"] = f"=IFERROR(SQRT(X{r}^2+AD{r}^2),\"\")"
+        # ... and chi-squared uses that total uncertainty, not the SEM alone.
+        ws[f"AB{r}"] = f"=IFERROR(AA{r}/(AE{r})^2,\"\")"
+        d_count_refs = ",".join(f"{RUN_COLS[run][1]}{r}" for run in (1, 2, 3, 4, 5))
+        ws[f"Y{r}"] = f"=COUNT({d_count_refs})"
+        ws[f"AC{r}"] = f'=IF(Y{r}=5,AB{r},"")'
 
 
 def _build_new_workbook(projectile_name):
@@ -125,53 +198,69 @@ def _build_new_workbook(projectile_name):
     ws["AD3"] = "Systematic error (m)"
     ws["AE3"] = "Total uncertainty (m)"
 
-    # t0 offset + systematic uncertainty + reduced chi-squared summary
-    ws["Y86"] = "t offset"
-    ws["Z86"] = T0_DEFAULT
-    ws["Y87"] = "systematic error (m)"
-    ws["Z87"] = SIGMA_SYS_DEFAULT
-    ws["AA85"] = "Reduced Chi squared"
-    ws["AB85"] = (f"=SUM(AC{FIRST_DATA_ROW}:AC{LAST_DATA_ROW})/"
-                  f"(COUNT(AC{FIRST_DATA_ROW}:AC{LAST_DATA_ROW})-1)")
-        # Highlight the reduced chi-squared result
-    ws["AB85"].fill = PatternFill(
-        fill_type="solid",
-        fgColor="FFFF00"   # yellow
-    )
-    ws["AB85"].font = Font(
-        bold=True,
-        color="FF0000"     # red
-    )
-    
+    # keep the headers visible when scrolling down a long (400-row) run
+    ws.freeze_panes = "A4"
 
-    # --- per-row live formulas ---
-    for r in range(FIRST_DATA_ROW, LAST_DATA_ROW + 1):
-        # references to the five runs' time / distance cells
-        t_refs = ",".join(f"{RUN_COLS[run][0]}{r}" for run in (5, 4, 3, 2, 1))
-        d_refs = ",".join(f"{RUN_COLS[run][1]}{r}" for run in (5, 4, 3, 2, 1))
-        # IFERROR guards keep the empty rows (no data yet) blank instead of
-        # showing #DIV/0! from AVERAGE/STDEV over empty cells. Filled rows are
-        # unaffected. The reduced chi-squared was always correct regardless
-        # (AC is gated on Y=5), this is purely so the sheet looks clean.
-        ws[f"S{r}"] = f"=IFERROR(AVERAGE({t_refs})*0.001,\"\")"
-        ws[f"T{r}"] = f"=S{r}"
-        ws[f"U{r}"] = f"=IFERROR(AVERAGE({d_refs})*0.001,\"\")"
-        ws[f"V{r}"] = f"=IFERROR(U{r}-$U${FIRST_DATA_ROW},\"\")"
-        ws[f"W{r}"] = f"=IFERROR(STDEV({d_refs})*0.001,\"\")"
-        ws[f"X{r}"] = f"=IFERROR(W{r}/SQRT(5),\"\")"
-        ws[f"Z{r}"] = f"=IFERROR(0.5*9.81*MAX(0,(T{r}-${T0_CELL}))^2,\"\")"
-        ws[f"AA{r}"] = f"=IFERROR((Z{r}-V{r})^2,\"\")"
-        # constant systematic (references the single editable cell) ...
-        ws[f"AD{r}"] = f"=${SIGMA_SYS_CELL}"
-        # ... combined with the SEM in quadrature ...
-        ws[f"AE{r}"] = f"=IFERROR(SQRT(X{r}^2+AD{r}^2),\"\")"
-        # ... and chi-squared uses that total uncertainty, not the SEM alone.
-        ws[f"AB{r}"] = f"=IFERROR(AA{r}/(AE{r})^2,\"\")"
-        d_count_refs = ",".join(f"{RUN_COLS[run][1]}{r}" for run in (1, 2, 3, 4, 5))
-        ws[f"Y{r}"] = f"=COUNT({d_count_refs})"
-        ws[f"AC{r}"] = f'=IF(Y{r}=5,AB{r},"")'
-
+    _write_summary_cells(ws)
+    _write_row_formulas(ws, FIRST_DATA_ROW, LAST_DATA_ROW)
     return wb
+
+
+def _autosize_columns(ws, min_width=10):
+    """
+    Widen every column so its text labels are readable without clicking.
+    Only text labels count (data and formula results are numbers that fit in the
+    minimum width). The A3:A5 labels are formulas of the form =B1 & " ...",
+    so their displayed length is worked out from the projectile name in B1.
+    """
+    from openpyxl.utils import get_column_letter
+    name = str(ws["B1"].value or "")
+    widths = {}
+    for row in ws.iter_rows():
+        for cell in row:
+            v = cell.value
+            if not isinstance(v, str):
+                continue
+            if v.startswith("=B1 &"):
+                text = name + v.split('"')[1]          # displayed label
+            elif v.startswith("="):
+                continue                               # numeric formula
+            else:
+                text = v
+            n = len(text) * (1.15 if cell.font and cell.font.b else 1.0)
+            col = get_column_letter(cell.column)
+            widths[col] = max(widths.get(col, 0), n)
+    for col, n in widths.items():
+        ws.column_dimensions[col].width = max(min_width, round(n + 2))
+
+
+def _upgrade_legacy_layout(ws):
+    """
+    Upgrade a workbook written by the old 80-row version in place, so a
+    condition started earlier with the old code can still take long runs.
+    Run data is untouched; the user's systematic-error value is carried over.
+    Returns True if an upgrade was performed.
+    """
+    if ws[f"S{LAST_DATA_ROW}"].value not in (None, ""):
+        return False                       # already the current layout
+    if ws[f"S{_LEGACY_LAST_DATA_ROW}"].value in (None, ""):
+        return False                       # not a recognisable old workbook
+
+    sigma_sys = ws[_LEGACY_SIGMA_SYS_CELL].value
+    if not isinstance(sigma_sys, (int, float)):
+        sigma_sys = SIGMA_SYS_DEFAULT
+
+    # old summary cells sit inside the new data block - clear them first
+    for addr in _LEGACY_SUMMARY_CELLS:
+        ws[addr] = None
+        ws[addr].fill = PatternFill(fill_type=None)
+        ws[addr].font = Font()
+
+    _write_summary_cells(ws, sigma_sys=sigma_sys)
+    # rewrite all rows: the existing ones reference the old t0/sigma cells
+    _write_row_formulas(ws, FIRST_DATA_ROW, LAST_DATA_ROW)
+    ws.freeze_panes = "A4"
+    return True
 
 
 def next_empty_run(ws):
@@ -245,6 +334,9 @@ def write_run(folder, projectile_name, times_ms, distances_mm,
     if os.path.exists(path):
         wb = openpyxl.load_workbook(path)
         ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
+        if _upgrade_legacy_layout(ws):
+            print(f"  (Upgraded {os.path.basename(path)} from the old 80-row layout; "
+                  f"summary cells are now {CHI2_CELL}/{T0_CELL}/{SIGMA_SYS_CELL}.)")
     else:
         wb = _build_new_workbook(projectile_name)
         ws = wb[SHEET_NAME]
@@ -268,7 +360,13 @@ def write_run(folder, projectile_name, times_ms, distances_mm,
             f"Refusing to overwrite (pass overwrite=True to force)."
         )
 
-    n = min(len(times_ms), len(distances_mm), N_DATA_ROWS)
+    n_in = min(len(times_ms), len(distances_mm))
+    n = min(n_in, N_DATA_ROWS)
+    if n_in > N_DATA_ROWS:
+        # no longer silent: say so if the workbook can't hold the whole run
+        print(f"  WARNING: run has {n_in} points but the workbook holds {N_DATA_ROWS}; "
+              f"only the first {N_DATA_ROWS} were written (the .txt file has them all). "
+              f"Increase N_DATA_ROWS in freefall_workbook.py.")
 
     # clear the column first (in case of overwrite of a longer previous run)
     for r in range(FIRST_DATA_ROW, LAST_DATA_ROW + 1):
@@ -283,6 +381,9 @@ def write_run(folder, projectile_name, times_ms, distances_mm,
     # keep the label fresh (protects against copy/paste mislabelling)
     ws["B1"] = projectile_name
 
+    # make every column header readable at a glance
+    _autosize_columns(ws)
+
     # auto-estimate t0 from all runs present and write it into the sheet
     try:
         refresh_t0(ws)
@@ -294,11 +395,11 @@ def write_run(folder, projectile_name, times_ms, distances_mm,
 
 
 if __name__ == "__main__":
-    # quick self-test with synthetic data
+    # quick self-test with synthetic data: a slow (fan-like) fall lasting ~5 s
     import numpy as np
     tmp = "/tmp/ff_test"
-    t = np.arange(0, 34) * 19.0
-    d = 0.5 * 9.81 * np.clip((t / 1000 - 0.11), 0, None) ** 2 * 1000
+    t = np.arange(0, 260) * 19.0
+    d = 0.5 * 1.5 * np.clip((t / 1000 - 0.11), 0, None) ** 2 * 1000   # g_eff ~ 1.5
     for run in range(1, 6):
         noise = np.random.normal(0, 3, size=len(d))
         path, rn, status = write_run(tmp, "Test Ball", t, d + noise)
