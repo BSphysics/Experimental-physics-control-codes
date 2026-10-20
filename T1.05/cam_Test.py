@@ -53,7 +53,7 @@ while True:
     
     idx+=1
 
-    img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    #img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
     if cv2.getWindowProperty("Webcam", cv2.WND_PROP_VISIBLE) < 1:
         print("👋 Window closed, exiting.")
