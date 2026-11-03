@@ -1,0 +1,17 @@
+[Unit]
+Description=Update PHY1035 lab code from GitHub
+Wants=network-online.target
+After=network-online.target time-sync.target
+
+[Service]
+# simple (not oneshot) so a slow network never holds up the desktop appearing
+Type=simple
+User=dorkmaster
+Group=dorkmaster
+Environment=HOME=/home/dorkmaster
+ExecStart=/home/dorkmaster/update-lab-code.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
