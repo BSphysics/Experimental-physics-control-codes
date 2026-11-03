@@ -1,0 +1,19 @@
+APPARATUS LEAK TEST
+===================
+
+Test duration: 119.72 s
+Number of readings: 238
+Initial volume: 381.6911 mL
+Final volume: 375.6826 mL
+Volume change: -6.0085 mL
+Leak rate: 3.158791 mL/min
+Acceptance limit: 5.000000 mL/min
+Volume linear-fit R^2: 0.95834
+Pressure change: 225.940 Pa
+Pressure change (%): 0.22070 %
+Pressure noise during settling: 112.20124 Pa
+Pressure sticking threshold: 561.00621 Pa
+Possible sticking events: 0
+
+VERDICT: PASS
+Leak rate is within the acceptable limit.
